@@ -1,0 +1,287 @@
+---
+title: "Module 4 - Solve LP Model Using R"
+author: "Sonali Shankeshi"
+date: "2025-09-16"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+# Introduction
+
+This assignment centers on a production planning issue for Weigelt Corporation. The corporation manufactures three products, Large, Medium, and Small units, at three different plants. The principal objective is to maximize profit while adhering to limitations imposed by plant capacity, storage space, demand limits, and equal levels of utilization among plants.
+
+Linear programming (LP) was applied in R to obtain the most optimal production plan that satisfies all of these requirements.
+
+```{r}
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(lpSolve)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(tinytex)
+
+```
+
+# Problem Setup
+
+Before solving the model, the problem inputs were defined in R. These include profit values, plant capacities, storage limits, space requirements, and demand restrictions.
+
+```{r}
+# Profits
+pL <- 420; pM <- 360; pS <- 300
+
+# Plant capacities
+cap <- c(P1=750, P2=900, P3=450)
+
+# Storage limits
+stor <- c(P1=13000, P2=12000, P3=5000)
+
+# Space per unit
+space <- c(L=20, M=15, S=12)
+
+# Demand caps
+dem <- c(L=900, M=1200, S=750)
+
+# Objective coefficients (9 production + 1 utilization variable)
+obj <- c(pL,pM,pS, pL,pM,pS, pL,pM,pS, 0)
+nvar <- length(obj)
+
+```
+
+Profits (pL, pM, pS): Unit profits for each of the Large ($420), Medium ($360), and Small ($300) products.
+
+Plant Capacities (cap): Maximum daily production units for each plant (750 for Plant 1, 900 for Plant 2, and 450 for Plant 3).
+
+Storage Space Limits (stor): Total space limitations in square feet for each plant (13,000 for Plant 1, 12,000 for Plant 2, and 5,000 for Plant 3).
+
+Space Requirements (space): Total storage space needed for each each unit produced (20 sq ft for Large, 15 sq ft for Medium, and 12 sq ft for Small)
+
+Demand limitations (dem): Maximum customer demand per day (900 for Large, 1200 for Medium, 750 for Small).
+
+The objective coefficients (obj) vector combines profit values for all 9 production variables (3 products × 3 plants) as well as 1 additional variable (t) to represent the fractional utilization that is common across the three plants. The vector is used to form the objective of the optimization problem which is to maximize profit in the daily profit. (The variable nvar counts the total number of decisions variables in the model - total = 10).
+
+# Model Constraints
+
+```{r}
+# Equal Utilization
+A_eq <- matrix(0, nrow = 3, ncol = nvar)
+b_eq <- c(0,0,0)
+dir_eq <- rep("=", 3)
+
+A_eq[1, c(1,2,3)] <- 1; A_eq[1, 10] <- -cap["P1"]
+A_eq[2, c(4,5,6)] <- 1; A_eq[2, 10] <- -cap["P2"]
+A_eq[3, c(7,8,9)] <- 1; A_eq[3, 10] <- -cap["P3"]
+
+# Storage
+A_stor <- matrix(0, nrow = 3, ncol = nvar)
+b_stor <- stor
+dir_stor <- rep("<=", 3)
+A_stor[1, 1:3] <- space
+A_stor[2, 4:6] <- space
+A_stor[3, 7:9] <- space
+
+# Demand
+A_dem <- matrix(0, nrow = 3, ncol = nvar)
+b_dem <- dem
+dir_dem <- rep("<=", 3)
+A_dem[1, c(1,4,7)] <- 1
+A_dem[2, c(2,5,8)] <- 1
+A_dem[3, c(3,6,9)] <- 1
+
+# t <= 1
+A_t <- matrix(0, nrow = 1, ncol = nvar)
+A_t[1, 10] <- 1
+b_t <- 1
+dir_t <- "<="
+
+# Combine
+A   <- rbind(A_eq, A_stor, A_dem, A_t)
+b   <- c(b_eq, b_stor, b_dem, b_t)
+dir <- c(dir_eq, dir_stor, dir_dem, dir_t)
+
+```
+
+The code defines the constraints that make up the feasible region for the optimization problem.
+
+The first set of constraints describes the equal utilization constraints. For each plant, total production is required to equal the maximum capacity produced times the common utilization variable t. This can be described formally as:
+
+Plant 1: x1L + x1M + x1S = 750 * t, 
+Plant 2: x2L + x2M + x2S = 900 * t, 
+Plant 3: x3L + x3M + x3S = 450 * t.
+This ensures that all plants are producing at the same percentage of available capacity, which ensures equal distribution of the work across the facilities.
+
+The second set of constraints describes the storage constraints. Every unit of production takes up a fixed amount of space (20 sq ft for Large, 15 sq ft for Medium, and 12 sq ft for Small) and the total space used in each plant cannot exceed the available storage (P1=13,000 sq ft, P2=12,000 sq ft, P3=5,000 sq ft). Effectively, these constraints ensure that the production plan is feasible with respect to available storage.
+
+The third set of constraints describes the demand constraints. The total production of any product size across all plants cannot exceed the customer demand. The level of demand is pre-defined as 900 units for Large, 1,200 units for Medium, and 750 units for Small. Total production can be regulated based on market demand to prevent oversupplying the market.
+
+Lastly, a capacity constraint is included by bounding t ≤ 1, which prevents the utilizations variable from exceeding one, meaning that no facilities can operate over 100% utilization.
+ 
+Each of these individual constraints groups – equal utilizations, storage, demand, and utilization constraints – are then included in the matrices A, b, and dir. This grouped set of equations and inequalities is passed to the solver, guaranteeing that the optimization respects all operating constraints at the same time. 
+
+# Solving the Model
+
+```{r}
+# Solve model
+sol <- lp(direction = "max",
+          objective.in = obj,
+          const.mat   = A,
+          const.dir   = dir,
+          const.rhs   = b,
+          transpose   = FALSE,
+          compute.sens = TRUE)
+
+sol$status    # 0 = optimal
+sol$objval    # optimal profit
+
+vars <- sol$solution
+names(vars) <- c("x1L","x1M","x1S",
+                 "x2L","x2M","x2S",
+                 "x3L","x3M","x3S","t")
+vars
+
+```
+## Results:
+
+Maximum profit: $696,000 per day
+
+Utilization (t): ~0.926, meaning every plant works at 92.6% capacity
+
+### Static Production Plan
+
+Plant	Large Units	Medium Units	Small Units	Total Units
+P1	517	178	0	695
+P2	0	667	167	834
+P3	0	0	417	417
+
+This shows that Plants 1 and 2 focus on Large and Medium units, while Plant 3 produces only Small units.
+
+# Utilization Check
+
+```{r}
+plan <- tibble(
+  Plant = rep(c("P1","P2","P3"), each=3),
+  Size  = rep(c("Large","Medium","Small"), times=3),
+  Units = vars[1:9]
+)
+
+utilization <- tibble(
+  Plant = c("P1","P2","P3"),
+  Capacity = cap,
+  Produced = c(sum(plan$Units[plan$Plant=="P1"]),
+               sum(plan$Units[plan$Plant=="P2"]),
+               sum(plan$Units[plan$Plant=="P3"])),
+  UtilizationFraction_t = vars["t"],
+  UtilizationPercent = 100*vars["t"]
+)
+
+kable(utilization, digits=2, caption="Equal Utilization Check")
+
+```
+
+### Static Utilization
+
+Plant	Capacity	Produced	Utilization %
+P1	750	695	92.6%
+P2	900	834	92.6%
+P3	450	417	92.6%
+
+All three plants run at the same percentage — proving the equal utilization condition worked correctly.
+
+# Storage and Demand Check 
+
+```{r}
+storage_use <- tibble(
+  Plant = c("P1","P2","P3"),
+  Used_sqft = c(20*vars["x1L"]+15*vars["x1M"]+12*vars["x1S"],
+                20*vars["x2L"]+15*vars["x2M"]+12*vars["x2S"],
+                20*vars["x3L"]+15*vars["x3M"]+12*vars["x3S"]),
+  Limit_sqft = stor,
+  Slack_sqft = stor - c(20*vars["x1L"]+15*vars["x1M"]+12*vars["x1S"],
+                        20*vars["x2L"]+15*vars["x2M"]+12*vars["x2S"],
+                        20*vars["x3L"]+15*vars["x3M"]+12*vars["x3S"])
+)
+
+demand_fill <- tibble(
+  Size = c("Large","Medium","Small"),
+  Produced = c(vars["x1L"]+vars["x2L"]+vars["x3L"],
+               vars["x1M"]+vars["x2M"]+vars["x3M"],
+               vars["x1S"]+vars["x2S"]+vars["x3S"]),
+  DemandCap = dem,
+  Slack = dem - c(vars["x1L"]+vars["x2L"]+vars["x3L"],
+                  vars["x1M"]+vars["x2M"]+vars["x3M"],
+                  vars["x1S"]+vars["x2S"]+vars["x3S"])
+)
+
+kable(storage_use, digits=2, caption="Storage Usage by Plant")
+kable(demand_fill, digits=2, caption="Demand Fulfillment and Slack")
+
+```
+
+### Static Storage Usage
+
+Plant	Used Sqft	Limit Sqft	Slack Sqft
+P1	13,000	13,000	0
+P2	12,000	12,000	0
+P3	5,000	5,000	0
+
+### Static Demand Fulfillment
+
+Size	Produced	Demand Cap	Slack
+Large	517	900	383
+Medium	845	1200	355
+Small	584	750	166
+
+The results show all plants exactly use their storage, and production never exceeds demand.
+
+# Sensitivity Analysis 
+
+```{r}
+# Constraint shadow prices
+sens_constraints <- tibble(
+  ConstraintIndex = 1:length(sol$duals),
+  ShadowPrice     = sol$duals,
+  DualLower       = sol$sens.rhs.lower,
+  DualUpper       = sol$sens.rhs.upper
+)
+
+kable(sens_constraints, digits=4, caption="Constraint Shadow Prices and Ranges")
+
+# Reduced costs
+var_info <- tibble(
+  Var         = names(vars),
+  Value       = vars,
+  ReducedCost = sol$duals[1:nvar],
+  RC_Lower    = sol$sens.coef.from,
+  RC_Upper    = sol$sens.coef.to
+)
+
+kable(var_info, digits=4, caption="Variable Values and Reduced Costs")
+
+```
+
+# Interpretation:
+
+Some shadow prices are positive, meaning those constraints (like demand for Large units) limit profit.
+
+Reduced costs show that Large and Medium products are already profitable enough to include, while others would need profit increases to be added further.
+
+This tells management that relaxing demand or storage could increase profits.
+
+# Conclusion
+
+The linear program design has yielded a straightforward and workable production plan for the Weigelt Corporation. The solution produces a maximum daily profit of $ 696,000 and ensures that the three plants all operate at the same production utilization--92.6% of capacity use in each plant. This course of action balanced the managers' desire to distribute the workload evenly amongst the plants and avoid having one facility under-utilized, while another might be over-utilized.
+
+The output also indicates a strategic production allocation: the plan is weighted towards Larger and Medium units, which have a higher profit per unit compared Small units which are produced only based on capacity and storage available. This balance allows for profit maximization while not exceeding storage space and demand (need) limits.
+
+The produce plan is feasible in implementation. Storage limits are adhered to, with each plant using exactly their allocated square footage. Demand limits were not violated and the output levels are all within the absorptive limits of the market. This indicates that the optimization yields a solution that can resolve not just theoretically, but can be executed in practice by the firm as well.
+
+Apart from its use in establishing the feasible production schedule, the model also provides an avenue for management analysts to review some of the assumptions of the case study. The sensitivity analysis illustrates that some constraints—specifically, shortage of storage space, and the maximum demand for larger-margin products—are binding. If the constraints are relaxed—through the construction of new storage facilities, more productive employees, or an increase in market demand—then profit can be enhanced.
+
+In short, the LP model illustrates how the quantitative optimization approach presents a way to justify implementing business decisions that apply both profit motives and operational realities. The model clearly provides the best possible outcome given current decision variables, and the potential value that could be apprehended if future capacity or demand, were to increase. Thus, demonstrating a reasonable route to planning for immediate implementation, as well as a primary component for longer-term decisions, for the Weigelt Corporation.
